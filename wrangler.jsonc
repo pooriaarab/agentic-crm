@@ -1,0 +1,21 @@
+{
+  // Worker config for the CRM HTTP API. Add your D1 database_id and
+  // KV id below, then run wrangler deploy from the pack root.
+  "name": "agentic-crm",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-01-01",
+  "vars": {
+    "PACK_NAME": "agentic-crm"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agentic-crm"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "VENDOR_CACHE"
+    }
+  ]
+}

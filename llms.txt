@@ -1,0 +1,15 @@
+# agentic-crm
+
+Small CRM for prospects, vendors, and leads on Cloudflare D1 and KV.
+
+Keywords: crm, contacts, pipeline, agentic-suite, claude-code, codex, cli, mcp.
+
+- SDK: import { MemoryCrmStore, createD1Store } from "agentic-crm".
+- CLI: agentic-crm add-prospect --name "..." --email "...".
+- MCP: run agentic-crm mcp, then call add_prospect.
+
+## Docs
+
+- README: https://github.com/pooriaarab/agentic-crm
+- Core contract: https://github.com/pooriaarab/agentic-crm/blob/main/docs/agentic-core.md
+- License: MIT

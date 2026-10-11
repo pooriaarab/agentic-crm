@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agentic-crm": {
+      "command": "npx",
+      "args": ["-y", "agentic-crm", "mcp"]
+    }
+  }
+}
