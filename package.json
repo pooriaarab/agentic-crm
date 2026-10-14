@@ -1,6 +1,6 @@
 {
   "name": "agentic-crm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript CRM SDK, CLI, and MCP server for prospects, vendors, and sales leads with Cloudflare D1 storage and Workers KV mirroring.",
   "keywords": [
     "crm",
