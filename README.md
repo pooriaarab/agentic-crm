@@ -1,127 +1,232 @@
-# Agentic CRM
+# agentic-crm
 
-Small CRM for prospects, vendors, and leads on Cloudflare D1 and KV.
+[![npm version](https://img.shields.io/npm/v/agentic-crm)](https://www.npmjs.com/package/agentic-crm) [![Downloads/month](https://img.shields.io/npm/dm/agentic-crm)](https://www.npmjs.com/package/agentic-crm) [![MIT license](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/license/mit)
 
-You run it three ways: as a terminal command, as an npm import,
-or as an MCP server for agents. All three share one store, so each
-face returns the same shapes.
+[Setup](#create-your-first-prospect) · [API and commands](#runtime-surfaces) · [Cloudflare setup](#integration-guides) · [Comparisons](#compare)
+
+agentic-crm is an open-source customer relationship management (CRM) SDK for developers who track prospects, suppliers, and sales leads. It provides in-memory storage and Cloudflare D1 persistence with optional Cloudflare Workers KV vendor copies. CLI, Model Context Protocol (MCP), and Worker interfaces expose the record operations.
 
 ## Install
 
-```sh
+```bash
 npm install agentic-crm
 ```
 
-The command needs Node 18 or newer.
+Node.js 18 or later is required for the SDK and CLI. TypeScript declarations are included.
 
-## Quick start
+## Create your first prospect
 
-Memory mode needs no keys. It keeps records in the process, so you
-can try every command at once.
-
-```sh
-npx agentic-crm add-prospect --name "Ava" --email "ava@example.com"
-npx agentic-crm add-vendor --name "Ink Supply" --category "office"
-npx agentic-crm add-lead --title "Site rebuild" --value 1200 --currency USD
-npx agentic-crm list-prospects
-npx agentic-crm move-lead --id <lead-id> --stage proposal
-```
-
-Each write prints JSON. Each read prints JSON. A missing record
-prints an error and exits 1.
-
-## Use D1 and KV
-
-Pass `--store d1` to persist records in Cloudflare D1. Vendors also
-mirror to KV as JSON under `vendor:<id>`. Set these vars first:
-
-| Var | Use |
-| --- | --- |
-| CLOUDFLARE_ACCOUNT_ID | Your Cloudflare account id. |
-| CLOUDFLARE_API_TOKEN | A token with D1 edit rights. |
-| CRM_D1_DATABASE_ID | The D1 database id. |
-| CRM_KV_NAMESPACE_ID | The KV namespace id. Optional. |
-
-```sh
-agentic-crm add-prospect --name "Ava" --email "ava@example.com" --store d1
-agentic-crm list-leads --stage proposal --store d1
-```
-
-Without `CRM_KV_NAMESPACE_ID` vendors still persist in D1. Only the
-KV copy is skipped. The pack reads no other store.
-
-## Preview writes
-
-Add `--dry-run` to preview any write. The pack checks guards and
-validates input, then prints the preview. It calls no adapter and
-records no cost.
-
-```sh
-agentic-crm add-lead --title "Rebuild" --dry-run
-agentic-crm move-lead --id <lead-id> --stage won --dry-run
-```
-
-## Use the library
+Save this as `crm-demo.mjs`, then run `node crm-demo.mjs`.
 
 ```js
-import { MemoryCrmStore, createD1Store } from "agentic-crm";
+import {
+  MemoryCrmStore, prospectInputSchema, runWrite, getCostReport,
+} from 'agentic-crm';
 
 const store = new MemoryCrmStore();
-const prospect = await store.addProspect({ name: "Ava", email: "ava@example.com" });
-console.log(await store.listProspects());
-
-const live = createD1Store(process.env);
-await live.init();
-console.log(await live.listLeads({ stage: "proposal" }));
+await store.init();
+const input = prospectInputSchema.parse({ name: 'Ava', email: 'ava@example.com' });
+const add = () => store.addProspect(input);
+console.log(await runWrite(store.name, 'add prospect Ava', { dryRun: true }, add));
+const written = await runWrite(store.name, 'add prospect Ava', {}, add);
+console.log(await store.getProspect(written.result.id));
+console.log(getCostReport());
 ```
 
-## Use the MCP server
+Success prints a preview, then Ava's record with an ID and `status: "new"`. The report shows `units: 1`.
+No credentials or environment variables are needed. Records survive only while this store instance exists.
+Separate memory-mode CLI invocations start with empty stores.
 
-Start the server, then point your agent at it:
+## How it works
 
-```sh
-agentic-crm mcp
-agentic-crm mcp --store d1
+```text
+SDK / CLI / MCP -> validation -> memory store
+                             -> SQL store -> D1 REST API or Worker DB binding
+Vendor SQL write -> optional KV mirror under vendor:<id>
+Worker HTTP routes -> SQL store through bindings
 ```
 
-Or add it to your MCP config:
+## Why it exists
+
+Some applications need a small record API under their own control. agentic-crm supplies three record types without a separate CRM account.
+HubSpot provides a broader CRM object API. agentic-crm leaves user interfaces, message delivery, and workflow automation to your application.
+
+## Compare
+
+Scope checked on 2026-10-14 against [HubSpot contact API documentation](https://developers.hubspot.com/docs/api-reference/legacy/crm/objects/contacts/guide).
+
+| Surface | agentic-crm | HubSpot CRM API |
+|---|---|---|
+| Record model | Fixed prospects, vendors, leads | CRM objects with properties and associations |
+| Persistence | Your Cloudflare D1 database or process memory | HubSpot account |
+| Configuration | TypeScript options, CLI flags, Worker bindings | Object properties and API requests |
+| Integration here | Native stores | No HubSpot adapter included |
+
+## Coverage
+
+| Integration | Status | Implemented behavior |
+|---|---|---|
+| Process memory | ✓ | Prospect, vendor, and lead operations |
+| Cloudflare D1 REST API | ✓ | SQL store for Node.js SDK, CLI, and MCP |
+| Cloudflare D1 Worker binding | ✓ | Same SQL store through `DB` |
+| Cloudflare Workers KV REST API | ✓ | Optional vendor JSON mirror and helper reads |
+| Cloudflare Workers KV binding | ✓ | Optional vendor mirror through `VENDOR_CACHE` |
+
+The source defines two stores, three record types, and two Cloudflare services with REST and binding paths.
+These paths are implemented. Tests use fake SQL runners, bindings, and fetch calls; no Cloudflare account is credential-verified for this rewrite.
+
+Prospect statuses are `new`, `contacted`, `qualified`, and `unqualified`.
+Vendor statuses are `active` and `inactive`.
+The five lead stages are `new`, `contacted`, `proposal`, `won`, and `lost`.
+
+## Common use cases
+
+1. Node.js developers: prototype a prospect workflow with `MemoryCrmStore` in one process.
+2. Cloudflare Workers developers: persist prospects and sales leads in D1 through the HTTP entry.
+3. Supplier operations teams: keep D1 vendor records and optional KV copies under `vendor:<id>`.
+4. MCP client authors: add a lead, read it back, and move it to `proposal` in one server session.
+5. TypeScript application teams: filter leads by prospect, supplier, stage, or title through a shared store contract.
+
+## Features
+
+- **Prospect records:** create, read, filter, update, and delete contact records.
+- **Vendor records:** manage suppliers with optional [Cloudflare KV mirroring](#integration-guides).
+- **Lead stages:** associate IDs, record values, and move leads between five stages.
+- **Validation:** parse inputs and patches with exported Zod schemas.
+- **Write previews:** use `runWrite` or CLI/MCP dry-run options before a mutation.
+- **Optional guards:** supply dispatch caps, UTC quiet hours, and a substring blocklist through SDK integration.
+- **Usage records:** count wrapped writes in the current process.
+
+## Runtime surfaces
+
+The Node.js SDK exports `MemoryCrmStore`, `SqlCrmStore`, `createD1Store`, D1/KV clients, validation schemas, and `runWrite`.
+It also re-exports shared logging, guard, and cost helpers from `agentic-core`.
+
+The CLI provides 20 commands, including help and version:
+
+| Records | Commands |
+|---|---|
+| Prospects | `add-prospect`, `get-prospect`, `list-prospects`, `update-prospect`, `delete-prospect` |
+| Vendors | `add-vendor`, `get-vendor`, `list-vendors`, `update-vendor`, `delete-vendor` |
+| Leads | `add-lead`, `get-lead`, `list-leads`, `update-lead`, `move-lead`, `delete-lead` |
+| Other | `costs`, `mcp`, `help`, `version` |
+
+Use `--help`/`-h` or `--version`/`-V` as shortcuts. Add `--store d1` for persistence or `--dry-run` to preview writes.
+
+The MCP server exposes 17 tools:
+
+| Records | Tools |
+|---|---|
+| Prospects | `add_prospect`, `get_prospect`, `list_prospects`, `update_prospect`, `delete_prospect` |
+| Vendors | `add_vendor`, `get_vendor`, `list_vendors`, `update_vendor`, `delete_vendor` |
+| Leads | `add_lead`, `get_lead`, `list_leads`, `update_lead`, `move_lead`, `delete_lead` |
+| Usage | `get_cost_report` |
 
 ```json
-{ "mcpServers": { "agentic-crm": { "command": "npx", "args": ["-y", "agentic-crm", "mcp"] } } }
+{"mcpServers":{"agentic-crm":{"command":"npx","args":["-y","agentic-crm","mcp"]}}}
 ```
 
-Tools: `add_prospect`, `get_prospect`, `list_prospects`,
-`update_prospect`, `delete_prospect`, `add_vendor`, `get_vendor`,
-`list_vendors`, `update_vendor`, `delete_vendor`, `add_lead`,
-`get_lead`, `list_leads`, `update_lead`, `move_lead`, `delete_lead`,
-`get_cost_report`. Write tools take `dryRun` to preview only.
+Use `npx agentic-crm mcp --store d1` for a persistent server.
+The separate `agentic-crm-mcp` binary starts the default memory server.
 
-## Three usecases
+The Worker exposes `GET /health`; collection GET/POST and item GET/PATCH/DELETE routes for `/prospects`, `/vendors`, and `/leads`.
+`POST /leads/:id/move` accepts `{ "stage": "proposal" }`.
 
-1. You track people to win. Add each prospect with a status, then
-   search and filter the list as it grows.
-2. You track suppliers in one place. Add each vendor once, then
-   read it back from D1 or from the KV copy.
-3. You run a small pipeline. Add each deal as a lead, then move it
-   from stage to stage until it closes.
+## Delivery and behavior limits
 
-## Guards and costs
+- Writes execute by default. Preview first with CLI `--dry-run`, MCP `dryRun: true`, or `runWrite` options.
+- `runWrite` does not validate inputs itself. Parse inputs before preview; CLI dry runs can skip store-level schema validation.
+- CLI D1 commands initialize the schema before `runWrite`. Even dry runs can call Cloudflare and create tables or indexes.
+- Direct store methods bypass `runWrite` guards and usage records. Default CLI and MCP startup configure no guards.
+- Memory records and cost records reset with the process. A separate CLI `costs` call cannot read previous process usage.
+- Wrapped writes add one usage unit even when a store returns `null` or `false`. Units are not Cloudflare charges.
+- D1 and KV writes are sequential, not atomic. A KV failure can leave the D1 mutation committed.
+- CRM reads use D1, not the KV mirror. KV is not a complete standalone CRM store.
+- D1/KV REST clients default to 15-second timeouts without retries. Record list methods provide no pagination.
+- Lead links have no foreign-key enforcement or cascading delete behavior. Currency checks length, not ISO membership.
+- Memory query filters search more fields than SQL filters. Their ordering also differs.
+- The Worker has no built-in authentication, authorization, write guards, or dry-run mode. Add access controls before exposing it.
+- Worker GET routes do not initialize tables. Initialize the database before the first read.
+- There is no managed CRM service, web dashboard, email sender, or HubSpot synchronization.
 
-Writes pass through guards: a dispatch cap, quiet hours, and a
-blocklist. A denied write throws and writes nothing. Each real
-write records one cost unit. Read the totals any time:
+## Integration guides
 
-```sh
-agentic-crm costs
+### Cloudflare D1 from Node.js
+
+Export your credentials before launching the process. The package does not load `.env` files.
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID='YOUR_ACCOUNT_ID'
+export CLOUDFLARE_API_TOKEN='YOUR_API_TOKEN'
+export CRM_D1_DATABASE_ID='YOUR_DATABASE_ID'
+# Optional vendor mirror:
+export CRM_KV_NAMESPACE_ID='YOUR_KV_NAMESPACE_ID'
 ```
 
-## Worker
+Use a token with D1 access and KV access when mirroring.
+Preview first, then persist and read a prospect:
 
-`src/worker.ts` serves the same store over HTTP on D1 plus KV
-bindings. It exposes `/health`, `/prospects`, `/vendors`, and
-`/leads`. Fill the D1 and KV ids in `wrangler.jsonc`, then deploy
-with wrangler from the pack root.
+```bash
+npx agentic-crm add-prospect --name Ava --email ava@example.com --store d1 --dry-run
+npx agentic-crm add-prospect --name Ava --email ava@example.com --store d1
+npx agentic-crm list-prospects --query Ava --store d1
+```
+
+The final command returns Ava's persisted record. Omit `CRM_KV_NAMESPACE_ID` to keep vendor records in D1 without mirroring.
+
+SDK callers can use `const store = createD1Store(process.env)` followed by `await store.init()`.
+
+### A Cloudflare Worker you deploy
+
+The repository includes `src/worker.ts` and `wrangler.jsonc`.
+Set your D1 `database_id` and optional KV namespace `id` in that configuration.
+If you omit KV, remove its incomplete namespace entry. Configure Node.js compatibility and access controls for your deployment.
+Initialize the D1 schema before collection reads. The exported `SCHEMA_STATEMENTS` contains the table and index statements.
+Deploy through your Wrangler setup after local verification; this package provides no deployment command or managed endpoint.
+
+## Status
+
+Version 0.1.0 is an early release. APIs and schema behavior can change before 1.0.
+Use [GitHub issues](https://github.com/pooriaarab/agentic-crm/issues) for support. Public case studies are not yet published in this repository.
+
+## FAQ
+
+### What is agentic-crm?
+
+agentic-crm is a TypeScript record SDK for prospects, suppliers, and sales leads. It exposes memory and Cloudflare D1 stores through CLI, MCP, and Worker interfaces.
+
+### Which integrations are verified?
+
+agentic-crm tests D1 and KV behavior through fakes and mocked transports. This rewrite does not verify a live Cloudflare account.
+
+### Does agentic-crm provide a managed CRM?
+
+agentic-crm runs in your Node.js process or a Worker you deploy. You own Cloudflare storage and access controls.
+
+### How is agentic-crm different from HubSpot?
+
+agentic-crm provides three fixed record types in your own store. HubSpot provides an account-based CRM object API with properties and associations.
+
+### Why is my memory-mode CLI list empty?
+
+agentic-crm creates a fresh memory store for each CLI process. Use one SDK instance, one MCP session, or D1 for records shared between calls.
+
+### Is KV a standalone store?
+
+agentic-crm uses KV as an optional vendor mirror. Prospects and leads remain in D1, and CRM reads also use D1.
+
+### Do dry runs validate everything without network calls?
+
+agentic-crm CLI dry runs can skip validation inside store methods. D1 mode also initializes the schema before returning a preview.
+
+### Do all SDK writes enforce guards?
+
+agentic-crm direct store methods validate records but bypass write guards. Use `runWrite` with a configured guard instance when you need guarded operations.
+
+### Does the Worker require authentication?
+
+agentic-crm Worker source does not enforce authentication. Add your own access controls before deployment.
 
 ## License
 
-MIT. See LICENSE.
+[MIT](https://opensource.org/license/mit).
