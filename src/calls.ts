@@ -66,6 +66,7 @@ export const callInputShape = {
 export const callPatchShape = {
   transcriptRef: nonEmpty("transcriptRef").optional(),
   audioRef: nonEmpty("audioRef").optional(),
+  status: z.enum(CALL_STATUSES).optional(),
 };
 
 export const callInputSchema = z
@@ -79,7 +80,18 @@ export const callInputSchema = z
       });
     }
   });
-export const callPatchSchema = z.object(callPatchShape);
+export const callPatchSchema = z.object(callPatchShape).superRefine((value, ctx) => {
+  if (
+    value.transcriptRef === undefined &&
+    value.audioRef === undefined &&
+    value.status === undefined
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "a patch needs a transcriptRef, an audioRef, or a status",
+    });
+  }
+});
 
 export type CallInput = z.input<typeof callInputSchema>;
 export type CallPatch = z.infer<typeof callPatchSchema>;

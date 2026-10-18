@@ -41,6 +41,20 @@ describe("memory call store", () => {
     expect(await store.attachTranscript("missing", { transcriptRef: "x" })).toBeNull();
   });
 
+  test("moves status and rejects an empty patch", async () => {
+    const store = new MemoryCallStore();
+    const requested = await store.requestCall({
+      prospectId: "p-1",
+      vendor: "dry",
+      to: "+14155550132",
+    });
+    const moved = await store.attachTranscript(requested.id, { status: "done" });
+    expect(moved?.status).toBe("done");
+    await expect(store.attachTranscript(requested.id, {})).rejects.toThrow(
+      "a patch needs a transcriptRef, an audioRef, or a status",
+    );
+  });
+
   test("needs a prospect or a lead and an E.164 destination", async () => {
     const store = new MemoryCallStore();
     await expect(store.requestCall({ vendor: "dry", to: "+14155550132" })).rejects.toThrow(

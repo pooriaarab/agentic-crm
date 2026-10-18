@@ -375,14 +375,28 @@ export function createMcpServer(deps: McpDeps = {}): McpServer {
   server.registerTool(
     "attach_transcript",
     {
-      description: "Attach transcript and audio refs to a call. Pass dryRun to preview only.",
+      description:
+        "Attach transcript/audio refs or move call status. Metadata only: records no cost. Pass dryRun to preview.",
       inputSchema: { ...idShape, ...callPatchShape, ...dryRunShape },
       annotations: WRITE_ANNOTATIONS,
     },
-    async ({ id, dryRun, ...patch }) =>
-      writeCall(`attach transcript to call ${id}`, dryRun, () =>
-        callStore.attachTranscript(id, patch as CallPatch),
-      ),
+    async ({ id, dryRun, ...patch }) => {
+      // Metadata, not a dispatch: no cost unit, so one call stays one unit.
+      if (dryRun === true) {
+        return okResult({ dryRun: true, label: `attach transcript to call ${id}` });
+      }
+      try {
+        const updated = await callStore.attachTranscript(id, patch as CallPatch);
+        return okResult({
+          dryRun: false,
+          label: `attach transcript to call ${id}`,
+          result: updated,
+        });
+      } catch (error) {
+        if (isToolError(error)) return errorResult(error);
+        throw error;
+      }
+    },
   );
 
   server.registerTool(

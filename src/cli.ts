@@ -151,7 +151,7 @@ const SPECS: Record<string, CommandSpec> = {
   "list-calls": { needs: [], allows: ["vendor", "status", "prospect", "lead"] },
   "attach-transcript": {
     needs: ["id", "transcript-ref"],
-    allows: ["id", "transcript-ref", "audio-ref"],
+    allows: ["id", "transcript-ref", "audio-ref", "status"],
   },
   costs: { needs: [], allows: [] },
   mcp: { needs: [], allows: [] },
@@ -394,6 +394,7 @@ function buildCallPatch(flags: Record<string, string>): CallPatch {
   return {
     transcriptRef: optionalFlag(flags, "transcript-ref"),
     audioRef: optionalFlag(flags, "audio-ref"),
+    status: optionalFlag(flags, "status") as CallPatch["status"],
   };
 }
 
@@ -676,17 +677,20 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       case "attach-transcript": {
         const id = flags["id"] as string;
         const patch = buildCallPatch(flags);
-        const written = await runCallWrite(
-          callStore.name,
-          `attach transcript to call ${id}`,
-          options,
-          () => callStore.attachTranscript(id, patch),
-        );
-        if (!written.dryRun && written.result === null) {
+        // Attach is metadata, not a dispatch: it writes straight to the
+        // store and records no cost unit, so one call stays one unit.
+        if (request.dryRun) {
+          io.out(JSON.stringify({ dryRun: true, label: `attach transcript to call ${id}` }));
+          return 0;
+        }
+        const updated = await callStore.attachTranscript(id, patch);
+        if (updated === null) {
           io.err(`no call with id "${id}"`);
           return 1;
         }
-        io.out(JSON.stringify(written));
+        io.out(
+          JSON.stringify({ dryRun: false, label: `attach transcript to call ${id}`, result: updated }),
+        );
         return 0;
       }
     }
