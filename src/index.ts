@@ -66,6 +66,30 @@ export type {
   CrmWriteResult,
 } from "./crm.js";
 
+// Call domain: records, validation, the store contract, the memory
+// store, and the guarded write path.
+export {
+  CALL_VENDORS,
+  CALL_STATUSES,
+  callInputSchema,
+  callPatchSchema,
+  callInputShape,
+  callPatchShape,
+  MemoryCallStore,
+  runCallWrite,
+  describeCallInput,
+  callCostAdapter,
+} from "./calls.js";
+export type {
+  CallVendor,
+  CallStatus,
+  Call,
+  CallInput,
+  CallPatch,
+  CallFilter,
+  CallStore,
+} from "./calls.js";
+
 // D1 adapter: REST client, SQL runners, the SQL store, env wiring.
 export {
   SCHEMA_STATEMENTS,
@@ -73,8 +97,10 @@ export {
   RestSqlRunner,
   BindingSqlRunner,
   SqlCrmStore,
+  SqlCallStore,
   readD1Env,
   createD1Store,
+  createD1CallStore,
 } from "./d1.js";
 export type {
   D1RestOptions,
@@ -89,8 +115,11 @@ export type {
 export {
   VENDOR_KEY_PREFIX,
   vendorKey,
+  CALL_KEY_PREFIX,
+  callKey,
   KvRestClient,
   KvVendorMirror,
+  KvCallMirror,
   KvBindingMirror,
 } from "./kv.js";
 export type { KvRestOptions, KvBinding } from "./kv.js";

@@ -11,6 +11,17 @@ import {
 } from "agentic-core";
 import { z, ZodError } from "zod";
 import {
+  CALL_STATUSES,
+  CALL_VENDORS,
+  MemoryCallStore,
+  describeCallInput,
+  runCallWrite,
+  type CallFilter,
+  type CallInput,
+  type CallPatch,
+  type CallStore,
+} from "./calls.js";
+import {
   describeInput,
   LEAD_STAGES,
   MemoryCrmStore,
@@ -26,7 +37,7 @@ import {
   type VendorInput,
   type VendorPatch,
 } from "./crm.js";
-import { createD1Store } from "./d1.js";
+import { createD1CallStore, createD1Store } from "./d1.js";
 import { DEFAULT_BRAND } from "./index.js";
 import { VERSION } from "./version.js";
 
@@ -54,6 +65,10 @@ export type CliCommand =
   | "update-lead"
   | "move-lead"
   | "delete-lead"
+  | "request-call"
+  | "get-call"
+  | "list-calls"
+  | "attach-transcript"
   | "costs"
   | "mcp"
   | "help"
@@ -76,6 +91,10 @@ const COMMANDS: CliCommand[] = [
   "update-lead",
   "move-lead",
   "delete-lead",
+  "request-call",
+  "get-call",
+  "list-calls",
+  "attach-transcript",
   "costs",
   "mcp",
   "help",
@@ -124,6 +143,16 @@ const SPECS: Record<string, CommandSpec> = {
   },
   "move-lead": { needs: ["id", "stage"], allows: ["id", "stage"] },
   "delete-lead": { needs: ["id"], allows: ["id"] },
+  "request-call": {
+    needs: ["vendor", "to"],
+    allows: ["vendor", "to", "prospect", "lead", "status", "barge-in", "transcript-ref", "audio-ref"],
+  },
+  "get-call": { needs: ["id"], allows: ["id"] },
+  "list-calls": { needs: [], allows: ["vendor", "status", "prospect", "lead"] },
+  "attach-transcript": {
+    needs: ["id", "transcript-ref"],
+    allows: ["id", "transcript-ref", "audio-ref", "status"],
+  },
   costs: { needs: [], allows: [] },
   mcp: { needs: [], allows: [] },
   help: { needs: [], allows: [] },
@@ -188,6 +217,7 @@ export interface CliIo {
   out(line: string): void;
   err(line: string): void;
   store?: CrmStore;
+  callStore?: CallStore;
   env?: Record<string, string | undefined>;
   guards?: Guards;
   logger?: Logger;
@@ -222,6 +252,12 @@ function helpText(): string {
     "  update-vendor --id <id> [--name <n>] [--contact-email <e>] [--category <c>] [--status <t>] [--notes <n>]",
     "  delete-vendor --id <id>",
     "",
+    "Calls:",
+    "  request-call --vendor <dry|bland|telnyx|vapi> --to <E.164> [--prospect <id>] [--lead <id>] [--status <s>] [--barge-in true|false] [--transcript-ref <r>] [--audio-ref <r>]",
+    "  get-call --id <id>",
+    "  list-calls [--vendor <v>] [--status <s>] [--prospect <id>] [--lead <id>]",
+    "  attach-transcript --id <id> --transcript-ref <r> [--audio-ref <r>]",
+    "",
     "Leads:",
     "  add-lead --title <t> [--prospect <id>] [--vendor <id>] [--value <n>] [--currency <c>] [--stage <s>] [--notes <n>]",
     "  get-lead --id <id>",
@@ -240,7 +276,7 @@ function helpText(): string {
     "  --help, -h     Print this help.",
     "  --version, -V  Print the version.",
     "",
-    `Statuses: prospects ${PROSPECT_STATUSES.join("/")}; vendors ${VENDOR_STATUSES.join("/")}; lead stages ${LEAD_STAGES.join("/")}.`,
+    `Statuses: prospects ${PROSPECT_STATUSES.join("/")}; vendors ${VENDOR_STATUSES.join("/")}; lead stages ${LEAD_STAGES.join("/")}; call vendors ${CALL_VENDORS.join("/")}; call statuses ${CALL_STATUSES.join("/")}.`,
   ].join("\n");
 }
 
@@ -333,6 +369,44 @@ function buildLeadPatch(flags: Record<string, string>): LeadPatch {
   };
 }
 
+function boolFlag(flags: Record<string, string>, key: string): boolean | undefined {
+  const raw = optionalFlag(flags, key);
+  if (raw === undefined) return undefined;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new UsageError(`--${key} needs "true" or "false", got "${raw}"`);
+}
+
+function buildCallInput(flags: Record<string, string>): CallInput {
+  return {
+    prospectId: optionalFlag(flags, "prospect"),
+    leadId: optionalFlag(flags, "lead"),
+    vendor: flags["vendor"] as CallInput["vendor"],
+    to: flags["to"] as string,
+    status: optionalFlag(flags, "status") as CallInput["status"],
+    transcriptRef: optionalFlag(flags, "transcript-ref"),
+    audioRef: optionalFlag(flags, "audio-ref"),
+    bargeIn: boolFlag(flags, "barge-in"),
+  };
+}
+
+function buildCallPatch(flags: Record<string, string>): CallPatch {
+  return {
+    transcriptRef: optionalFlag(flags, "transcript-ref"),
+    audioRef: optionalFlag(flags, "audio-ref"),
+    status: optionalFlag(flags, "status") as CallPatch["status"],
+  };
+}
+
+function buildCallFilter(flags: Record<string, string>): CallFilter {
+  return {
+    vendor: optionalFlag(flags, "vendor") as CallFilter["vendor"],
+    status: optionalFlag(flags, "status") as CallFilter["status"],
+    prospectId: optionalFlag(flags, "prospect"),
+    leadId: optionalFlag(flags, "lead"),
+  };
+}
+
 function buildStore(request: CliRequest, io: CliIo): CrmStore {
   if (io.store !== undefined) return io.store;
   const name = request.flags["store"] ?? "memory";
@@ -340,6 +414,15 @@ function buildStore(request: CliRequest, io: CliIo): CrmStore {
     return createD1Store(io.env ?? process.env);
   }
   return new MemoryCrmStore();
+}
+
+function buildCallStore(request: CliRequest, io: CliIo): CallStore {
+  if (io.callStore !== undefined) return io.callStore;
+  const name = request.flags["store"] ?? "memory";
+  if (name === "d1") {
+    return createD1CallStore(io.env ?? process.env);
+  }
+  return new MemoryCallStore();
 }
 
 function writeOptions(request: CliRequest, io: CliIo): CrmWriteOptions {
@@ -373,13 +456,17 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       case "mcp": {
         const store = buildStore(request, io);
         await store.init();
+        const callStore = buildCallStore(request, io);
+        await callStore.init();
         const { startMcp } = await import("./mcp.js");
-        await startMcp({ store, guards: io.guards, logger: io.logger });
+        await startMcp({ store, callStore, guards: io.guards, logger: io.logger });
         return 0;
       }
     }
     const store = buildStore(request, io);
     await store.init();
+    const callStore = buildCallStore(request, io);
+    await callStore.init();
     const options = writeOptions(request, io);
     const flags = request.flags;
 
@@ -553,6 +640,57 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
           return 1;
         }
         io.out(JSON.stringify(written));
+        return 0;
+      }
+      case "request-call": {
+        const input = buildCallInput(flags);
+        const written = await runCallWrite(
+          callStore.name,
+          describeCallInput(input),
+          options,
+          () => callStore.requestCall(input),
+        );
+        io.out(JSON.stringify(written));
+        return 0;
+      }
+      case "get-call": {
+        const found = await callStore.getCall(flags["id"] as string);
+        if (found === null) {
+          io.err(`no call with id "${flags["id"]}"`);
+          return 1;
+        }
+        io.out(JSON.stringify(found));
+        return 0;
+      }
+      case "list-calls": {
+        const filter = buildCallFilter(flags);
+        if (filter.vendor !== undefined) {
+          z.object({ vendor: z.enum(CALL_VENDORS) }).parse({ vendor: filter.vendor });
+        }
+        if (filter.status !== undefined) {
+          z.object({ status: z.enum(CALL_STATUSES) }).parse({ status: filter.status });
+        }
+        const rows = await callStore.listCalls(filter);
+        io.out(JSON.stringify(rows));
+        return 0;
+      }
+      case "attach-transcript": {
+        const id = flags["id"] as string;
+        const patch = buildCallPatch(flags);
+        // Attach is metadata, not a dispatch: it writes straight to the
+        // store and records no cost unit, so one call stays one unit.
+        if (request.dryRun) {
+          io.out(JSON.stringify({ dryRun: true, label: `attach transcript to call ${id}` }));
+          return 0;
+        }
+        const updated = await callStore.attachTranscript(id, patch);
+        if (updated === null) {
+          io.err(`no call with id "${id}"`);
+          return 1;
+        }
+        io.out(
+          JSON.stringify({ dryRun: false, label: `attach transcript to call ${id}`, result: updated }),
+        );
         return 0;
       }
     }

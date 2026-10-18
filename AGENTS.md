@@ -35,6 +35,10 @@ Keywords: crm, contacts, pipeline, agentic-suite, claude-code, codex, cli, mcp.
 | update_lead | Patch a lead. Pass dryRun to preview. |
 | move_lead | Move a lead to a new stage. Pass dryRun to preview. |
 | delete_lead | Delete a lead. Pass dryRun to preview. |
+| request_call | Request a voice call for a prospect or lead. Pass dryRun to preview. |
+| get_call | Read one call by id. |
+| list_calls | List calls with vendor, status, and link filters. |
+| attach_transcript | Attach transcript/audio refs or move call status. Records no cost. |
 | get_cost_report | Read session cost totals. |
 
 ## The loop

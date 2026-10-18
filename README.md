@@ -92,6 +92,8 @@ The five lead stages are `new`, `contacted`, `proposal`, `won`, and `lost`.
 - **Prospect records:** create, read, filter, update, and delete contact records.
 - **Vendor records:** manage suppliers with optional [Cloudflare KV mirroring](#integration-guides).
 - **Lead stages:** associate IDs, record values, and move leads between five stages.
+- **Call records:** request voice calls against a prospect or lead, track vendor and status, attach transcript and audio refs, and flag barge-in. Live dispatch stays in agentic-phone; this pack records intent and outcomes.
+- **Call costs:** count one unit per vendor-and-subject pair, so the cost report reconciles against vendor billing.
 - **Validation:** parse inputs and patches with exported Zod schemas.
 - **Write previews:** use `runWrite` or CLI/MCP dry-run options before a mutation.
 - **Optional guards:** supply dispatch caps, UTC quiet hours, and a substring blocklist through SDK integration.
