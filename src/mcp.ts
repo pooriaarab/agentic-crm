@@ -31,10 +31,23 @@ import {
   type VendorInput,
   type VendorPatch,
 } from "./crm.js";
+import {
+  CALL_STATUSES,
+  CALL_VENDORS,
+  MemoryCallStore,
+  callInputShape,
+  callPatchShape,
+  describeCallInput,
+  runCallWrite,
+  type CallInput,
+  type CallPatch,
+  type CallStore,
+} from "./calls.js";
 import { DEFAULT_BRAND } from "./index.js";
 
 export interface McpDeps {
   store?: CrmStore;
+  callStore?: CallStore;
   guards?: Guards;
   logger?: Logger;
 }
@@ -87,6 +100,7 @@ const DELETE_ANNOTATIONS = {
 
 export function createMcpServer(deps: McpDeps = {}): McpServer {
   const store = deps.store ?? new MemoryCrmStore();
+  const callStore = deps.callStore ?? new MemoryCallStore();
   const guards = deps.guards;
   const logger = deps.logger ?? createLogger({ quiet: true });
   const server = new McpServer({
@@ -111,6 +125,20 @@ export function createMcpServer(deps: McpDeps = {}): McpServer {
   const read = async (act: () => Promise<unknown>): Promise<ToolResult> => {
     try {
       return okResult(await act());
+    } catch (error) {
+      if (isToolError(error)) return errorResult(error);
+      throw error;
+    }
+  };
+
+  const writeCall = async <T>(
+    label: string,
+    dryRun: boolean | undefined,
+    act: () => Promise<T>,
+  ): Promise<ToolResult> => {
+    const options: CrmWriteOptions = { guards, logger, dryRun: dryRun ?? false };
+    try {
+      return okResult(await runCallWrite(callStore.name, label, options, act));
     } catch (error) {
       if (isToolError(error)) return errorResult(error);
       throw error;
@@ -303,6 +331,58 @@ export function createMcpServer(deps: McpDeps = {}): McpServer {
       annotations: DELETE_ANNOTATIONS,
     },
     async ({ id, dryRun }) => write(`delete lead ${id}`, dryRun, () => store.deleteLead(id)),
+  );
+
+  server.registerTool(
+    "request_call",
+    {
+      description: "Request a voice call for a prospect or lead. Pass dryRun to preview only.",
+      inputSchema: { ...callInputShape, ...dryRunShape },
+      annotations: WRITE_ANNOTATIONS,
+    },
+    async ({ dryRun, ...input }) =>
+      writeCall(describeCallInput(input as CallInput), dryRun, () =>
+        callStore.requestCall(input as CallInput),
+      ),
+  );
+
+  server.registerTool(
+    "get_call",
+    {
+      description: "Read one call by id. Returns null when missing.",
+      inputSchema: idShape,
+      annotations: READ_ANNOTATIONS,
+    },
+    async ({ id }) => read(() => callStore.getCall(id)),
+  );
+
+  server.registerTool(
+    "list_calls",
+    {
+      description: "List calls, with optional vendor, status, and link filters.",
+      inputSchema: {
+        vendor: z.enum(CALL_VENDORS).optional().describe("Only this channel."),
+        status: z.enum(CALL_STATUSES).optional().describe("Only this call status."),
+        prospectId: z.string().optional().describe("Only calls linked to this prospect."),
+        leadId: z.string().optional().describe("Only calls linked to this lead."),
+      },
+      annotations: READ_ANNOTATIONS,
+    },
+    async ({ vendor, status, prospectId, leadId }) =>
+      read(() => callStore.listCalls({ vendor, status, prospectId, leadId })),
+  );
+
+  server.registerTool(
+    "attach_transcript",
+    {
+      description: "Attach transcript and audio refs to a call. Pass dryRun to preview only.",
+      inputSchema: { ...idShape, ...callPatchShape, ...dryRunShape },
+      annotations: WRITE_ANNOTATIONS,
+    },
+    async ({ id, dryRun, ...patch }) =>
+      writeCall(`attach transcript to call ${id}`, dryRun, () =>
+        callStore.attachTranscript(id, patch as CallPatch),
+      ),
   );
 
   server.registerTool(

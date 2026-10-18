@@ -6,16 +6,18 @@ import type { KvBinding } from "./kv.js";
 // clauses), so tests fail when the store writes wrong SQL.
 
 type Row = Record<string, unknown>;
-type TableName = "prospects" | "vendors" | "leads";
+type TableName = "prospects" | "vendors" | "leads" | "calls";
+
+const TABLES = new Set<string>(["prospects", "vendors", "leads", "calls"]);
 
 function tableOf(sql: string): TableName {
   const match = /(?:FROM|INTO|UPDATE)\s+(\w+)/i.exec(sql);
   if (match === null) throw new Error(`fake cannot find table in: ${sql}`);
   const name = match[1]?.toLowerCase();
-  if (name !== "prospects" && name !== "vendors" && name !== "leads") {
+  if (!TABLES.has(name)) {
     throw new Error(`fake knows no table "${match[1]}"`);
   }
-  return name;
+  return name as TableName;
 }
 
 function likeMatch(value: unknown, pattern: string): boolean {
@@ -30,6 +32,7 @@ export class FakeSqlRunner implements SqlRunner {
     prospects: new Map(),
     vendors: new Map(),
     leads: new Map(),
+    calls: new Map(),
   };
 
   async all<T>(sql: string, params: unknown[]): Promise<T[]> {

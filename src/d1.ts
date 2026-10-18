@@ -26,7 +26,17 @@ import {
   PROSPECT_STATUSES,
   VENDOR_STATUSES,
 } from "./crm.js";
-import { KvRestClient, KvVendorMirror } from "./kv.js";
+import { callInputSchema, callPatchSchema, CALL_STATUSES, CALL_VENDORS } from "./calls.js";
+import type {
+  Call,
+  CallFilter,
+  CallInput,
+  CallPatch,
+  CallStore,
+  CallStatus,
+  CallVendor,
+} from "./calls.js";
+import { KvCallMirror, KvRestClient, KvVendorMirror } from "./kv.js";
 
 // D1 over REST. The CLI and the MCP server run on plain Node, so they
 // reach D1 through the Cloudflare HTTP API, not through a binding.
@@ -74,6 +84,22 @@ export const SCHEMA_STATEMENTS: string[] = [
     updated_at TEXT NOT NULL
   ) STRICT`,
   `CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage)`,
+  `CREATE TABLE IF NOT EXISTS calls (
+    id TEXT PRIMARY KEY,
+    prospect_id TEXT,
+    lead_id TEXT,
+    vendor TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    status TEXT NOT NULL,
+    transcript_ref TEXT,
+    audio_ref TEXT,
+    barge_in INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT`,
+  `CREATE INDEX IF NOT EXISTS idx_calls_vendor ON calls(vendor)`,
+  `CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)`,
 ];
 
 export interface D1RestOptions {
@@ -313,6 +339,20 @@ const vendorRecordSchema = z.object({
   updatedAt: z.string(),
 });
 
+interface CallRow {
+  id: string;
+  prospect_id: string | null;
+  lead_id: string | null;
+  vendor: string;
+  destination: string;
+  status: string;
+  transcript_ref: string | null;
+  audio_ref: string | null;
+  barge_in: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 const leadRecordSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -353,6 +393,36 @@ function toVendor(row: VendorRow): Vendor {
   });
 }
 
+const callRecordSchema = z.object({
+  id: z.string(),
+  prospectId: z.string().optional(),
+  leadId: z.string().optional(),
+  vendor: z.enum(CALL_VENDORS),
+  to: z.string(),
+  status: z.enum(CALL_STATUSES),
+  transcriptRef: z.string().optional(),
+  audioRef: z.string().optional(),
+  bargeIn: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+function toCall(row: CallRow): Call {
+  return callRecordSchema.parse({
+    id: row.id,
+    prospectId: row.prospect_id ?? undefined,
+    leadId: row.lead_id ?? undefined,
+    vendor: row.vendor,
+    to: row.destination,
+    status: row.status,
+    transcriptRef: row.transcript_ref ?? undefined,
+    audioRef: row.audio_ref ?? undefined,
+    bargeIn: row.barge_in === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+}
+
 function toLead(row: LeadRow): Lead {
   return leadRecordSchema.parse({
     id: row.id,
@@ -381,6 +451,11 @@ export interface VendorMirror {
   remove(id: string): Promise<void>;
 }
 
+export interface CallMirror {
+  put(call: Call): Promise<void>;
+  remove(id: string): Promise<void>;
+}
+
 const PROSPECT_COLUMNS: Record<string, string> = {
   name: "name",
   email: "email",
@@ -396,6 +471,17 @@ const VENDOR_COLUMNS: Record<string, string> = {
   category: "category",
   status: "status",
   notes: "notes",
+};
+
+const CALL_COLUMNS: Record<string, string> = {
+  prospectId: "prospect_id",
+  leadId: "lead_id",
+  vendor: "vendor",
+  to: "destination",
+  status: "status",
+  transcriptRef: "transcript_ref",
+  audioRef: "audio_ref",
+  bargeIn: "barge_in",
 };
 
 const LEAD_COLUMNS: Record<string, string> = {
@@ -659,6 +745,110 @@ export class SqlCrmStore implements CrmStore {
   }
 }
 
+// Calls. Same store shape as the CRM records, with the transcript
+// and audio refs written through an optional KV mirror so fast reads
+// of the refs can live next to the D1 table.
+
+export class SqlCallStore implements CallStore {
+  readonly name: string;
+
+  constructor(
+    private readonly runner: SqlRunner,
+    private readonly callMirror?: CallMirror,
+    name = "d1",
+  ) {
+    this.name = name;
+  }
+
+  async init(): Promise<void> {
+    await this.runner.execMany(SCHEMA_STATEMENTS);
+  }
+
+  async requestCall(input: CallInput): Promise<Call> {
+    const parsed = callInputSchema.parse(input);
+    const at = nowIso();
+    const id = randomUUID();
+    await this.runner.run(
+      `INSERT INTO calls (id, prospect_id, lead_id, vendor, destination, status, transcript_ref, audio_ref, barge_in, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        parsed.prospectId ?? null,
+        parsed.leadId ?? null,
+        parsed.vendor,
+        parsed.to,
+        parsed.status,
+        parsed.transcriptRef ?? null,
+        parsed.audioRef ?? null,
+        parsed.bargeIn ? 1 : 0,
+        at,
+        at,
+      ],
+    );
+    const created = await this.getCall(id);
+    if (created === null) {
+      throw new VendorError("d1 insert of call left no row behind");
+    }
+    await this.callMirror?.put(created);
+    return created;
+  }
+
+  async getCall(id: string): Promise<Call | null> {
+    const row = await this.runner.first<CallRow>(
+      `SELECT id, prospect_id, lead_id, vendor, destination, status, transcript_ref, audio_ref, barge_in, created_at, updated_at
+       FROM calls WHERE id = ?`,
+      [id],
+    );
+    return row === null ? null : toCall(row);
+  }
+
+  async listCalls(filter: CallFilter = {}): Promise<Call[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter.vendor !== undefined) {
+      clauses.push("vendor = ?");
+      params.push(filter.vendor);
+    }
+    if (filter.status !== undefined) {
+      clauses.push("status = ?");
+      params.push(filter.status);
+    }
+    if (filter.prospectId !== undefined) {
+      clauses.push("prospect_id = ?");
+      params.push(filter.prospectId);
+    }
+    if (filter.leadId !== undefined) {
+      clauses.push("lead_id = ?");
+      params.push(filter.leadId);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = await this.runner.all<CallRow>(
+      `SELECT id, prospect_id, lead_id, vendor, destination, status, transcript_ref, audio_ref, barge_in, created_at, updated_at
+       FROM calls ${where} ORDER BY created_at DESC`,
+      params,
+    );
+    return rows.map(toCall);
+  }
+
+  async attachTranscript(id: string, patch: CallPatch): Promise<Call | null> {
+    const current = await this.getCall(id);
+    if (current === null) return null;
+    const parsed = callPatchSchema.parse(patch);
+    const { clause, params } = buildSetClause(parsed as Record<string, unknown>, CALL_COLUMNS);
+    if (clause.length === 0) return current;
+    await this.runner.run(`UPDATE calls SET ${clause}, updated_at = ? WHERE id = ?`, [
+      ...params,
+      nowIso(),
+      id,
+    ]);
+    const next = await this.getCall(id);
+    if (next !== null) {
+      await this.callMirror?.put(next);
+    }
+    return next;
+  }
+}
+
 // Env wiring. --store d1 reads these four vars. The KV namespace is
 // optional: without it vendors still persist in D1, only the KV copy
 // is skipped.
@@ -715,4 +905,29 @@ export function createD1Store(
           }),
         );
   return new SqlCrmStore(new RestSqlRunner(client), mirror, "d1");
+}
+
+export function createD1CallStore(
+  env: Record<string, string | undefined>,
+  fetchFn?: typeof fetch,
+): SqlCallStore {
+  const config = readD1Env(env);
+  const client = new D1RestClient({
+    accountId: config.accountId,
+    databaseId: config.databaseId,
+    apiToken: config.apiToken,
+    fetchFn,
+  });
+  const mirror =
+    config.kvNamespaceId === undefined
+      ? undefined
+      : new KvCallMirror(
+          new KvRestClient({
+            accountId: config.accountId,
+            namespaceId: config.kvNamespaceId,
+            apiToken: config.apiToken,
+            fetchFn,
+          }),
+        );
+  return new SqlCallStore(new RestSqlRunner(client), mirror, "d1");
 }

@@ -1,4 +1,5 @@
 import { VendorError } from "agentic-core";
+import type { Call } from "./calls.js";
 import type { Vendor } from "./crm.js";
 
 // KV over REST. Vendors live in D1 plus KV: D1 holds the table, KV
@@ -217,6 +218,46 @@ export class KvVendorMirror {
     return keys
       .filter((key) => key.startsWith(VENDOR_KEY_PREFIX))
       .map((key) => key.slice(VENDOR_KEY_PREFIX.length));
+  }
+}
+
+// Call mirror. One JSON copy per call under call:<id>, carrying the
+// transcript and audio refs next to the record. Written through after
+// each D1 call write, mirroring the vendor path. The blobs themselves
+// live wherever the refs point (agentic-phone owns dispatch).
+
+export const CALL_KEY_PREFIX = "call:";
+
+export function callKey(id: string): string {
+  return `${CALL_KEY_PREFIX}${id}`;
+}
+
+export class KvCallMirror {
+  constructor(private readonly client: KvRestClient) {}
+
+  async put(call: Call): Promise<void> {
+    await this.client.put(callKey(call.id), JSON.stringify(call));
+  }
+
+  async get(id: string): Promise<Call | null> {
+    const raw = await this.client.get(callKey(id));
+    if (raw === null) return null;
+    try {
+      return JSON.parse(raw) as Call;
+    } catch (error) {
+      throw new VendorError(`kv holds broken JSON for call ${id}`, { cause: error });
+    }
+  }
+
+  async remove(id: string): Promise<void> {
+    await this.client.remove(callKey(id));
+  }
+
+  async listIds(): Promise<string[]> {
+    const keys = await this.client.listKeys(CALL_KEY_PREFIX);
+    return keys
+      .filter((key) => key.startsWith(CALL_KEY_PREFIX))
+      .map((key) => key.slice(CALL_KEY_PREFIX.length));
   }
 }
 

@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 describe("mcp server", () => {
-  test("serves seventeen tools", async () => {
+  test("serves twenty-one tools", async () => {
     const { client, server } = await linkedClient();
     try {
       const tools = await client.listTools();
@@ -38,17 +38,21 @@ describe("mcp server", () => {
           "add_lead",
           "add_prospect",
           "add_vendor",
+          "attach_transcript",
           "delete_lead",
           "delete_prospect",
           "delete_vendor",
+          "get_call",
           "get_cost_report",
           "get_lead",
           "get_prospect",
           "get_vendor",
+          "list_calls",
           "list_leads",
           "list_prospects",
           "list_vendors",
           "move_lead",
+          "request_call",
           "update_lead",
           "update_prospect",
           "update_vendor",
